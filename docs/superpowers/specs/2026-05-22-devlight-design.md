@@ -11,6 +11,14 @@
 
 **可复用目标(2026-05-22 追加):** 项目要做成可复用、可推 GitHub 的仓库——用户后续会再做几盏。拓扑为**各连各的、一台机器一盏灯**:每盏灯独立配网、独立命名;这台 Mac 只驱动一盏;别人 clone 仓库、烧录、配网、起名、设一个 URL 即可拥有自己的灯。多盏灯靠**唯一 mDNS 名**互不干扰。
 
+## 1.5 实施状态(2026-05-22 收尾)
+
+- ✅ **固件**:WiFi/mDNS/WebServer、聚合、LED(绿常亮/黄闪/红闪/离线慢闪)、自动重连、captive portal、设备命名,已烧录验证(设备 `devlight-4b70.local`,三色 + 优先级肉眼确认)。
+- ✅ **Claude Code 接入**:hooks 已装并实测会随会话状态变灯。
+- ✅ **Mac 侧 `devlight-set`**:已修两个关键问题 ——(a)`curl -4` 强制 IPv4,避免 `.local` 的 IPv6 mDNS 查询挂起 ~5s(原 `--max-time 1` 因此必然超时、状态从不生效);(b)后台 fire-and-forget,0.5s 阻塞→0.05s,消除灯滞后。
+- ⏸️ **Codex**:用户决定暂缓、自理。脚本 `devlight-codex-notify.sh`(支持链式转发下游)已在仓库,`~/.codex/config.toml` 已**还原**为原 Computer Use,不留侵入。实测确认 Codex notify 可用且 `agent-turn-complete` 信息全,但无"回合开始"事件。
+- 已知限制见 README(批准后卡红、Notification 误红、多窗口覆盖)。
+
 ## 2. 状态模型与灯色映射
 
 每个 agent 有一个子状态 ∈ `{idle, working, confirm}`:
