@@ -7,4 +7,5 @@ agent="$1"; state="$2"
 cfg="$HOME/.config/devlight/url"
 base="http://devlight.local"
 [ -f "$cfg" ] && base="$(tr -d '[:space:]' < "$cfg")"
-curl -s --noproxy '*' --max-time 1 "$base/set?agent=$agent&state=$state" >/dev/null 2>&1 || true
+# -4 强制 IPv4:避免 .local 的 IPv6(AAAA)mDNS 查询挂起 ~5s
+curl -4 -s --noproxy '*' --max-time 2 "$base/set?agent=$agent&state=$state" >/dev/null 2>&1 || true
