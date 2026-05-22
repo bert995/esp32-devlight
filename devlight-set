@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# 用法: devlight-set <claude|codex> <idle|working|confirm>
+# 目标地址来自 ~/.config/devlight/url(默认 http://devlight.local)。
+# 单一配置点:换灯/换设备名只改那个文件。非阻塞、失败不报错,绝不拖慢 agent。
+agent="$1"; state="$2"
+[ -z "$agent" ] || [ -z "$state" ] && exit 0
+cfg="$HOME/.config/devlight/url"
+base="http://devlight.local"
+[ -f "$cfg" ] && base="$(tr -d '[:space:]' < "$cfg")"
+curl -s --noproxy '*' --max-time 1 "$base/set?agent=$agent&state=$state" >/dev/null 2>&1 || true
