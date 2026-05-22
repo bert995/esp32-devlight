@@ -9,6 +9,8 @@
 
 把这盏三色灯接成 **Claude Code + OpenAI Codex 两个编码 agent 的实时状态指示灯**,放在桌上一眼看出当前该干嘛。
 
+**可复用目标(2026-05-22 追加):** 项目要做成可复用、可推 GitHub 的仓库——用户后续会再做几盏。拓扑为**各连各的、一台机器一盏灯**:每盏灯独立配网、独立命名;这台 Mac 只驱动一盏;别人 clone 仓库、烧录、配网、起名、设一个 URL 即可拥有自己的灯。多盏灯靠**唯一 mDNS 名**互不干扰。
+
 ## 2. 状态模型与灯色映射
 
 每个 agent 有一个子状态 ∈ `{idle, working, confirm}`:
@@ -34,19 +36,22 @@
 
 ```
 Claude Code 事件 ──hook──┐
-                          ├─→ HTTP GET ─→ ESP32(持有 claude/codex 子状态,算优先级)─→ GPIO
+                          ├─→ devlight-set <agent> <state> ─→ HTTP GET ─→ ESP32(持有 claude/codex 子状态,算优先级)─→ GPIO
 Codex 事件 ──notify脚本──┘
-   curl -s --max-time 1 "http://devlight.local/set?agent=<claude|codex>&state=<idle|working|confirm>" || true
+   devlight-set 内部:curl -s --max-time 1 "$BASE/set?agent=<claude|codex>&state=<idle|working|confirm>" || true
+   $BASE 来自 ~/.config/devlight/url(默认 http://devlight.local)
 ```
 
-- 状态聚合逻辑放在 **ESP32**(Mac 侧无常驻进程,hook 就是一行 curl)。
-- 服务发现用 **mDNS**:ESP32 注册为 `devlight.local`(macOS 自带 Bonjour 可解析)。
+- 状态聚合逻辑放在 **ESP32**(Mac 侧无常驻进程,hook 最终就是一行 curl)。
+- 服务发现用 **mDNS**:ESP32 注册为 `devlight-<设备名>.local`(设备名在配网时设定,未设则用芯片 ID 后缀,如 `devlight-a1b2.local`);macOS 自带 Bonjour 可解析。
+- **Mac 侧单一配置点**:`devlight-set` 复用脚本从 `~/.config/devlight/url` 读目标 URL,所有 hook/notify 都调它。换灯/换名只改这一个文件。
 
 ## 4. 组件
 
 ### 4.1 ESP32 固件 `esp32-devlight.ino`
-- **联网**:连 2.4GHz WiFi → mDNS `devlight.local` → 起 WebServer(ESP32 core 自带 `WiFi`/`WebServer`/`DNSServer`/`ESPmDNS`/`Preferences`,**无需额外库**)。
-- **状态存储**:`claude`、`codex` 子状态在内存;WiFi 凭据存 NVS(`Preferences`),掉电不丢。
+- **联网**:连 2.4GHz WiFi → mDNS `devlight-<设备名>.local` → 起 WebServer(ESP32 core 自带 `WiFi`/`WebServer`/`DNSServer`/`ESPmDNS`/`Preferences`,**无需额外库**)。
+- **设备命名(复用关键)**:NVS 存 `name`;主机名 = `devlight-<name>`,`name` 为空时回退 `devlight-<芯片MAC后4位hex>`。配网页提供"设备名"输入。多盏灯因此不撞名。
+- **状态存储**:`claude`、`codex` 子状态在内存;WiFi 凭据 + 设备名存 NVS(`Preferences`),掉电不丢。
 - **HTTP 接口**:
   - `GET /set?agent=<claude|codex>&state=<idle|working|confirm>` → 更新子状态,返回 `200`;参数非法返回 `400`。
   - `GET /` → 纯文本返回当前 `claude`/`codex` 子状态 + 聚合结果(浏览器调试用)。
@@ -54,24 +59,26 @@ Codex 事件 ──notify脚本──┘
 - **WiFi 容错**:断线自动重连;重连期间走"离线三灯慢闪"。
 - **配网(provisioning)**:
   - **优先**:若 `secrets.h` 预置了 SSID/密码(用户直接提供),首次开机直接连。
-  - **回退**:无预置凭据、或连接失败超过 N 秒 → 进 **captive portal**:开 AP `DevLight-Setup`,DNS 劫持到本机配网页,手机连上填 WiFi,存 NVS 后重启连入。
+  - **回退**:无预置凭据、或连接失败超过 ~20 秒 → 进 **captive portal**:开 AP `DevLight-Setup`,DNS 劫持到本机配网页,手机连上填 **WiFi + 设备名**,存 NVS 后重启连入。
   - 凭据**不写进 git、不回显**;`secrets.h` 加入 `.gitignore`,提供 `secrets.h.example` 模板。
 
-### 4.2 Claude Code hooks(追加到 `~/.claude/settings.json`)
-保留现有 `SessionStart`/`SessionEnd`(mempalace 同步),仅**追加**:
+### 4.2 Mac 侧复用脚本 `devlight-set`
+- 仓库内 `devlight-set`(bash):用法 `devlight-set <agent> <state>`;从 `~/.config/devlight/url` 读 BASE(默认 `http://devlight.local`),执行 `curl -s --max-time 1 "$BASE/set?agent=&state=" || true`。
+- **所有 hook 与 Codex notify 都调它** —— 单一配置点,换设备只改 `~/.config/devlight/url`。非阻塞、失败不报错。
 
-| 事件 | 上报 state |
+### 4.3 Claude Code hooks(追加到 `~/.claude/settings.json`)
+保留现有 `SessionStart`/`SessionEnd`(mempalace 同步),仅**追加**,命令统一调 `devlight-set`:
+
+| 事件 | 命令 |
 |---|---|
-| `UserPromptSubmit` | `working` 🟡 |
-| `Notification` | `confirm` 🔴 |
-| `Stop` | `idle` 🟢 |
-| `SessionEnd` | `idle` 🟢(追加到现有 SessionEnd) |
+| `UserPromptSubmit` | `devlight-set claude working` 🟡 |
+| `Notification` | `devlight-set claude confirm` 🔴 |
+| `Stop` | `devlight-set claude idle` 🟢 |
+| `SessionEnd` | `devlight-set claude idle` 🟢(追加到现有 SessionEnd) |
 
-命令统一 `curl -s --max-time 1 "http://devlight.local/set?agent=claude&state=X" >/dev/null 2>&1 || true` —— **超时即弃、绝不阻塞/报错拖慢 Claude**。
-
-### 4.3 Codex 集成
+### 4.4 Codex 集成
 - `~/.codex/config.toml` 设 `notify = ["/Users/bytedance/esp32-devlight/devlight-codex-notify.sh"]`。
-- 脚本解析 Codex 传入的事件 JSON,映射到 working/idle/confirm 后 curl(同样非阻塞、失败不报错)。
+- 脚本解析 Codex 传入的事件 JSON,映射到 working/idle/confirm 后调 `devlight-set codex <state>`。
 
 ## 5. 错误处理
 - curl `--max-time 1` + `|| true`:灯/网络不可达完全不影响 agent 工作。
@@ -84,15 +91,20 @@ Codex 事件 ──notify脚本──┘
 3. **mDNS 可达性**:确认这台 Mac 能解析 `devlight.local`(企业网络偶有 mDNS 限制);不行则回退到固定 IP / 在配网页显示 IP。
 
 ## 7. 产物清单
-- `esp32-devlight/esp32-devlight.ino`(新固件)
+- `esp32-devlight/esp32-devlight.ino`(新固件,含设备命名)
 - `esp32-devlight/secrets.h`(本地,gitignored)+ `secrets.h.example`
-- `esp32-devlight/devlight-codex-notify.sh`
+- `esp32-devlight/devlight-set`(Mac 侧复用脚本,入库)
+- `esp32-devlight/devlight-codex-notify.sh`(入库)
+- `esp32-devlight/README.md`(复用/烧录/配网/GitHub 说明)
+- git 仓库(分支 main,后续推 GitHub)
 - `~/.claude/settings.json` 追加 hooks(保留现有)
+- `~/.config/devlight/url`(本机目标地址,**不入库**)
 - `~/.codex/config.toml` 改 `notify`
 - 烧录参数:FQBN `esp32:esp32:esp32`,端口 `/dev/cu.wchusbserial10`
 
 ## 8. 非目标(YAGNI)
 - 不做手机/网页实时看板(`GET /` 纯文本调试足够)。
-- 不做多灯/多设备、不做历史记录、不做亮度/颜色自定义。
+- 不做"一台 Mac 同时驱动多盏灯"、不做不同灯对应不同项目的状态路由(已选**各连各的、一机一灯**;留口子但本期不做)。
+- 不做历史记录、不做亮度/颜色自定义。
 - 不支持企业级 802.1X WiFi(用普通 2.4GHz 或热点)。
 - 不动 `esp32-traffic-light` 测试程序。
