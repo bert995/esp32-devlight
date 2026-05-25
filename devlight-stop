@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Stop 钩子智能判色:回合结束时判断「球在谁那」。
+#   - 我最后一句以问号(？/?)结尾,或用了 AskUserQuestion → confirm(红,等你)
+#   - 否则 → idle(绿,收工)
+# 输入:Claude Code 经 stdin 传入的 JSON(含 transcript_path)。
+# 任何异常都静默退化为 idle(绿),绝不冤枉「已完成」、绝不卡住 agent。
+SET="$HOME/.local/bin/devlight-set"
+state=$(python3 - <<'PY' 2>/dev/null
+import json, sys, re
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("idle"); sys.exit(0)
+path = data.get("transcript_path") or ""
+last = None
+try:
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            # 先用子串粗筛,只对 assistant 行做 JSON 解析(transcript 可能很大)
+            if '"role":"assistant"' not in line and '"role": "assistant"' not in line:
+                continue
+            try:
+                o = json.loads(line)
+            except Exception:
+                continue
+            msg = o.get("message")
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                last = msg
+except Exception:
+    print("idle"); sys.exit(0)
+
+if not last:
+    print("idle"); sys.exit(0)
+
+content = last.get("content")
+state = "idle"
+if isinstance(content, list):
+    # 用了 AskUserQuestion = 在问你 → 红
+    for blk in content:
+        if isinstance(blk, dict) and blk.get("type") == "tool_use" and blk.get("name") == "AskUserQuestion":
+            print("confirm"); sys.exit(0)
+    # 取最后一个非空 text 块的最后一行,看是否含问号
+    last_text = ""
+    for blk in content:
+        if isinstance(blk, dict) and blk.get("type") == "text":
+            t = (blk.get("text") or "").strip()
+            if t:
+                last_text = t
+    if last_text:
+        lines = [ln for ln in last_text.splitlines() if ln.strip()]
+        if lines and re.search(r"[?？]", lines[-1]):
+            state = "confirm"
+print(state)
+PY
+)
+[ -z "$state" ] && state="idle"
+"$SET" claude "$state"
+exit 0
