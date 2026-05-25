@@ -7,12 +7,12 @@
 
 | 灯 | 含义 |
 |---|---|
-| 🟢 绿常亮 | 完成 / 空闲 |
-| 🟡 黄闪(~2Hz) | 正在开发中 |
-| 🔴 红闪(~2Hz) | 需要你确认(权限 / 输入) |
+| 🟢 绿常亮 | 空闲 / 会话结束 |
+| 🟡 黄闪(~2Hz) | 我在干活、不需要你(开发中 / 工具刚执行完) |
+| 🔴 红闪(~2Hz) | 该你了:回合结束等你 / 需要确认(权限 / 输入) |
 | ⚪ 三灯一起慢闪(~0.5Hz) | 未联网 / 配网模式 |
 
-多 agent 时按优先级 **红 > 黄 > 绿** 聚合(任一要确认→红;否则任一在干活→黄;否则绿)。
+多 agent 时按优先级 **红 > 黄 > 绿** 聚合(任一该你了→红;否则任一在干活→黄;否则绿)。
 
 ## 硬件接线
 
@@ -61,12 +61,17 @@ def ensure(ev,st):
         for h in g.get('hooks',[]):
             if 'devlight-set' in h.get('command',''): return
     arr.append({"hooks":[{"type":"command","command":f"{SET} claude {st}"}]})
-ensure('UserPromptSubmit','working'); ensure('Notification','confirm')
-ensure('Stop','idle'); ensure('SessionEnd','idle')
+ensure('UserPromptSubmit','working'); ensure('PostToolUse','working')
+ensure('Notification','confirm')
+ensure('Stop','confirm'); ensure('SessionEnd','idle')
 json.dump(d,open(p,'w'),indent=2,ensure_ascii=False); print('done')
 PY
 ```
 新开一个 Claude Code 会话生效。
+
+> **为什么 Stop→confirm 而不是 idle**:让灯在每个回合结束时变红,表达"球在你那、该你回话了",而不是误以为"任务完成、可以走开"。代价:任务正常做完(并不真的需要你做什么)灯也会停在红。
+> **PostToolUse→working** 是配套:每执行完一个工具就把灯切回黄,这样批准权限后灯会立刻回黄(我在干活),不会僵在红——解决了下面"已知限制"里原来那条。
+> 想要更克制的版本(红只表示真的需要确认),把 `Stop` 改回 `idle`、去掉 `PostToolUse` 即可。
 
 ## 文件
 
@@ -92,7 +97,7 @@ curl -4 --noproxy '*' "http://devlight-<名>.local/set?agent=claude&state=workin
 
 ## 已知限制
 
-- 批准权限后,灯会停在红色直到本轮答完(没有事件把它切回黄;可加 `PostToolUse` hook 改善,本期未做)。
+- `Stop→confirm` 下,任务正常做完(并不真需要你处理)灯也会停在红——红的含义是"回合结束、该你了",不区分"等你回话"和"已完成"。介意的话把 `Stop` 改回 `idle`。
 - `Notification` 在 Claude 闲置提醒时也会触发(→红)。
 - 多个 Claude Code 窗口同时跑会互相覆盖 `claude` 子状态(本期按单会话设计)。
 - 仅支持 2.4GHz WiFi(ESP32 限制),不支持企业级 802.1X。
